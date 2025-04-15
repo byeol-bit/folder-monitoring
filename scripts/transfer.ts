@@ -22,6 +22,20 @@ type Question = {
   question: string;
 };
 
+// 접근이 제한된 시스템 폴더 목록
+const RESTRICTED_FOLDERS = [
+  'Recovery',
+  'System Volume Information',
+  '$RECYCLE.BIN',
+  'Config.Msi',
+  'Documents and Settings',
+  'Program Files',
+  'Program Files (x86)',
+  'ProgramData',
+  'Windows',
+  'Windows.old'
+];
+
 async function getSFTPConfig(): Promise<SFTPConfig> {
   return new Promise((resolve) => {
     const config: SFTPConfig = {
@@ -72,22 +86,42 @@ async function findAndTransferFiles(folderPath: string, config: SFTPConfig) {
 
   // 로컬 파일 검색
   function findFiles(dir: string) {
-    const items = fs.readdirSync(dir);
-    for (const item of items) {
-      const fullPath = path.join(dir, item);
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isDirectory()) {
-        findFiles(fullPath);
-      } else {
-        filesToTransfer.push(fullPath);
-        console.log(`발견된 파일: ${fullPath}`);
+    try {
+      const items = fs.readdirSync(dir);
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        
+        // 시스템 폴더 체크
+        if (RESTRICTED_FOLDERS.includes(item)) {
+          console.log(`시스템 폴더 ${fullPath} 건너뜀`);
+          continue;
+        }
+
+        try {
+          const stat = fs.statSync(fullPath);
+          
+          if (stat.isDirectory()) {
+            findFiles(fullPath);
+          } else {
+            filesToTransfer.push(fullPath);
+            console.log(`발견된 파일: ${fullPath}`);
+          }
+        } catch (error) {
+          console.log(`경고: ${fullPath}에 접근할 수 없습니다. 건너뜁니다.`);
+        }
       }
+    } catch (error) {
+      console.log(`경고: ${dir} 폴더에 접근할 수 없습니다. 건너뜁니다.`);
     }
   }
 
   findFiles(folderPath);
   console.log(`\n총 ${filesToTransfer.length}개의 파일을 발견했습니다.`);
+
+  if (filesToTransfer.length === 0) {
+    console.log('전송할 파일이 없습니다.');
+    return;
+  }
 
   // SFTP 연결 및 파일 전송
   conn.on('ready', () => {
