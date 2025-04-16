@@ -1,20 +1,17 @@
 import { Client, SFTPWrapper } from 'ssh2';
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
-import { stdin as input, stdout as output } from 'process';
+import { getLatestModifiedFile, formatFileSize } from '../app/utils/fileUtils';
 
-const rl = readline.createInterface({
-  input,
-  output
-});
-
-interface SFTPConfig {
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  remotePath: string;
+interface Config {
+  folderPath: string;
+  sftp: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    remotePath: string;
+  };
 }
 
 interface FolderInfo {
@@ -22,12 +19,12 @@ interface FolderInfo {
   size: number;
   fileCount: number;
   subFolders: FolderInfo[];
+  latestFile?: {
+    name: string;
+    size: number;
+    lastModified: Date;
+  };
 }
-
-type Question = {
-  key: keyof SFTPConfig;
-  question: string;
-};
 
 // 접근이 제한된 시스템 폴더 목록
 const RESTRICTED_FOLDERS = [
@@ -43,59 +40,54 @@ const RESTRICTED_FOLDERS = [
   'Windows.old'
 ];
 
-async function getSFTPConfig(): Promise<SFTPConfig> {
-  return new Promise((resolve) => {
-    const config: SFTPConfig = {
-      host: '',
-      port: 22,
-      username: '',
-      password: '',
-      remotePath: ''
-    };
-
-    const questions: Question[] = [
-      { key: 'host', question: 'SFTP 서버 주소를 입력하세요: ' },
-      { key: 'port', question: 'SFTP 포트를 입력하세요 (기본값: 22): ' },
-      { key: 'username', question: '사용자 이름을 입력하세요: ' },
-      { key: 'password', question: '비밀번호를 입력하세요: ' },
-      { key: 'remotePath', question: '원격 서버의 저장 경로를 입력하세요: ' }
-    ];
-
-    let currentIndex = 0;
-
-    function askQuestion() {
-      if (currentIndex >= questions.length) {
-        resolve(config);
-        return;
-      }
-
-      const { key, question } = questions[currentIndex];
-      rl.question(question, (answer) => {
-        if (key === 'port') {
-          config[key] = answer ? parseInt(answer) : 22;
-        } else {
-          config[key] = answer;
-        }
-        currentIndex++;
-        askQuestion();
-      });
+function loadConfig(): Config {
+  try {
+    const configPath = path.join(process.cwd(), 'config.json');
+    if (!fs.existsSync(configPath)) {
+      throw new Error('config.json 파일이 존재하지 않습니다.');
     }
 
-    askQuestion();
-  });
+    const configData = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(configData) as Config;
+
+    // 필수 설정값 검증
+    if (!config.folderPath || !config.sftp.host || !config.sftp.username || !config.sftp.password) {
+      throw new Error('필수 설정값이 누락되었습니다.');
+    }
+
+    return config;
+  } catch (error) {
+    console.error('설정 파일 로드 중 오류 발생:', error);
+    process.exit(1);
+  }
 }
 
-function formatSize(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = bytes;
-  let unitIndex = 0;
+async function ensureRemoteDirectory(sftp: SFTPWrapper, remotePath: string): Promise<void> {
+  const parts = remotePath.split('/').filter(Boolean);
+  let currentPath = '';
 
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
+  for (const part of parts) {
+    currentPath = currentPath ? `${currentPath}/${part}` : part;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        sftp.mkdir(currentPath, (err) => {
+          if (err) {
+            // 디렉토리가 이미 존재하는 경우는 무시
+            if ((err as any).code === 4) {
+              resolve();
+            } else {
+              reject(err);
+            }
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch (error) {
+      console.error(`원격 디렉토리 생성 오류 (${currentPath}):`, error);
+      throw error;
+    }
   }
-
-  return `${size.toFixed(2)} ${units[unitIndex]}`;
 }
 
 async function collectFolderInfo(folderPath: string): Promise<FolderInfo> {
@@ -135,6 +127,12 @@ async function collectFolderInfo(folderPath: string): Promise<FolderInfo> {
         console.log(`경고: ${fullPath}에 접근할 수 없습니다. 건너뜁니다.`);
       }
     }
+
+    // 가장 최근에 수정된 파일 정보 추가
+    const latestFile = getLatestModifiedFile(folderPath);
+    if (latestFile) {
+      info.latestFile = latestFile;
+    }
   } catch (error) {
     console.log(`경고: ${folderPath} 폴더에 접근할 수 없습니다. 건너뜁니다.`);
   }
@@ -142,38 +140,10 @@ async function collectFolderInfo(folderPath: string): Promise<FolderInfo> {
   return info;
 }
 
-async function ensureRemoteDirectory(sftp: SFTPWrapper, remotePath: string): Promise<void> {
-  const parts = remotePath.split('/').filter(Boolean);
-  let currentPath = '';
-
-  for (const part of parts) {
-    currentPath = currentPath ? `${currentPath}/${part}` : part;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        sftp.mkdir(currentPath, (err) => {
-          if (err) {
-            // 디렉토리가 이미 존재하는 경우는 무시
-            if ((err as any).code === 4) {
-              resolve();
-            } else {
-              reject(err);
-            }
-          } else {
-            resolve();
-          }
-        });
-      });
-    } catch (error) {
-      console.error(`원격 디렉토리 생성 오류 (${currentPath}):`, error);
-      throw error;
-    }
-  }
-}
-
-async function transferFolderInfo(folderPath: string, config: SFTPConfig) {
-  console.log(`\n${folderPath} 폴더 정보를 수집하고 있습니다...`);
+async function transferFolderInfo(config: Config) {
+  console.log(`\n${config.folderPath} 폴더 정보를 수집하고 있습니다...`);
   
-  const folderInfo = await collectFolderInfo(folderPath);
+  const folderInfo = await collectFolderInfo(config.folderPath);
   const jsonData = JSON.stringify(folderInfo, null, 2);
   
   // 현재 시간을 포함한 파일명 생성
@@ -184,9 +154,13 @@ async function transferFolderInfo(folderPath: string, config: SFTPConfig) {
   // JSON 파일 저장
   fs.writeFileSync(localFilePath, jsonData);
   console.log(`\n폴더 정보가 ${fileName} 파일에 저장되었습니다.`);
-  console.log(`총 크기: ${formatSize(folderInfo.size)}`);
+  console.log(`총 크기: ${formatFileSize(folderInfo.size)}`);
   console.log(`총 파일 수: ${folderInfo.fileCount}`);
   console.log(`하위 폴더 수: ${folderInfo.subFolders.length}`);
+  if (folderInfo.latestFile) {
+    console.log(`가장 최근 수정된 파일: ${folderInfo.latestFile.name}`);
+    console.log(`최근 파일 크기: ${formatFileSize(folderInfo.latestFile.size)}`);
+  }
 
   // SFTP 연결 및 파일 전송
   const conn = new Client();
@@ -200,7 +174,7 @@ async function transferFolderInfo(folderPath: string, config: SFTPConfig) {
         return;
       }
 
-      const remoteFilePath = path.join(config.remotePath, fileName).replace(/\\/g, '/');
+      const remoteFilePath = path.join(config.sftp.remotePath, fileName).replace(/\\/g, '/');
 
       // 파일 전송
       const readStream = fs.createReadStream(localFilePath);
@@ -227,40 +201,20 @@ async function transferFolderInfo(folderPath: string, config: SFTPConfig) {
   });
 
   conn.connect({
-    host: config.host,
-    port: config.port,
-    username: config.username,
-    password: config.password
+    host: config.sftp.host,
+    port: config.sftp.port,
+    username: config.sftp.username,
+    password: config.sftp.password
   });
 }
 
 async function startTransfer() {
-  rl.question('\n정보를 수집할 폴더 경로를 입력하세요: ', async (folderPath) => {
-    if (!folderPath) {
-      console.log('폴더 경로를 입력해주세요.');
-      startTransfer();
-      return;
-    }
-
-    if (!fs.existsSync(folderPath)) {
-      console.log('입력한 폴더가 존재하지 않습니다.');
-      startTransfer();
-      return;
-    }
-
-    console.log('\nSFTP 서버 정보를 입력해주세요.');
-    const config = await getSFTPConfig();
-    await transferFolderInfo(folderPath, config);
-
-    rl.question('\n다른 폴더의 정보를 수집하시겠습니까? (y/n): ', (answer) => {
-      if (answer.toLowerCase() === 'y') {
-        startTransfer();
-      } else {
-        console.log('\n프로그램을 종료합니다.');
-        rl.close();
-      }
-    });
-  });
+  try {
+    const config = loadConfig();
+    await transferFolderInfo(config);
+  } catch (error) {
+    console.error('프로그램 실행 중 오류 발생:', error);
+  }
 }
 
 console.log('폴더 정보 수집 및 전송 프로그램을 시작합니다...');

@@ -1,0 +1,10 @@
+{
+  "folderPath": "D:/",
+  "sftp": {
+    "host": "223.130.138.7",
+    "port": 9822,
+    "username": "nier",
+    "password": "ghsgkqrh!@2024",
+    "remotePath": "/data"
+  }
+} 
