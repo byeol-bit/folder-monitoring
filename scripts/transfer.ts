@@ -124,7 +124,7 @@ async function transferFolderInfo(config: Config) {
   const timestamp = koreaTime.toISOString()
     .replace(/[-T:]/g, '')
     .slice(0, 12); // yyyyMMddHHmm 형식으로 변환
-  const fileName = `cloudmount_${timestamp}.json`;
+  const fileName = `cloudmount.json`;
   const localFilePath = path.join(process.cwd(), fileName);
   
   // JSON 파일 저장
