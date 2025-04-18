@@ -122,11 +122,9 @@ async function transferFolderInfo(config: Config) {
   const now = new Date();
   const koreaTime = new Date(now.getTime() + (9 * 60 * 60 * 1000)); // UTC+9 (한국 시간)
   const timestamp = koreaTime.toISOString()
-    .replace('T', '-')
-    .replace(/:/g, '-')
-    .split('.')[0]
-    .slice(0, -3); // 초 단위 제거
-  const fileName = `busan-${timestamp}.json`;
+    .replace(/[-T:]/g, '')
+    .slice(0, 12); // yyyyMMddHHmm 형식으로 변환
+  const fileName = `cloudmount_${timestamp}.json`;
   const localFilePath = path.join(process.cwd(), fileName);
   
   // JSON 파일 저장
@@ -153,28 +151,50 @@ async function transferFolderInfo(config: Config) {
       }
 
       const remoteFilePath = path.join(config.sftp.remotePath, fileName).replace(/\\/g, '/');
-
-      // 파일 전송
       const readStream = fs.createReadStream(localFilePath);
       const writeStream = sftp.createWriteStream(remoteFilePath);
 
-      writeStream.on('close', () => {
-        console.log(`\n파일이 성공적으로 전송되었습니다: ${remoteFilePath}`);
-        // 로컬 파일 삭제
-        fs.unlinkSync(localFilePath);
+      // 스트림 에러 핸들링 추가
+      readStream.on('error', (err: Error) => {
+        console.error('읽기 스트림 오류:', err);
+        writeStream.end();
         conn.end();
       });
 
       writeStream.on('error', (err: Error) => {
-        console.error('파일 전송 오류:', err);
+        console.error('쓰기 스트림 오류:', err);
+        readStream.destroy();
         conn.end();
+      });
+
+      writeStream.on('close', () => {
+        console.log(`\n파일이 성공적으로 전송되었습니다: ${remoteFilePath}`);
+        
+        // 약간의 지연 후 연결 종료
+        setTimeout(() => {
+          conn.end();
+        }, 1000);
+        
+        // 로컬 파일 삭제
+        fs.unlinkSync(localFilePath);
       });
 
       readStream.pipe(writeStream);
     });
   });
 
-  conn.on('error', (err: Error) => {
+  // 연결 종료 이벤트 핸들링 추가
+  conn.on('end', () => {
+    console.log('SFTP 연결이 정상적으로 종료되었습니다.');
+  });
+
+  conn.on('error', (err: Error & { code?: string }) => {
+    // ECONNRESET 에러는 파일 전송 완료 후 발생하면 무시
+    if (err.code === 'ECONNRESET') {
+      console.log(err);
+      console.log('연결이 종료되었습니다. (정상적인 종료 과정)');
+      return;
+    }
     console.error('연결 오류:', err);
   });
 

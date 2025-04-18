@@ -1,10 +1,10 @@
 {
-  "folderPath": "D:",
+  "folderPath": "D:/GIS",
   "sftp": {
-    "host": "223.130.138.7",
+    "host": "220.120.74.116",
     "port": 9822,
-    "username": "nier",
-    "password": "ghsgkqrh!@2024",
-    "remotePath": "/data"
+    "username": "e2m3",
+    "password": "korea2025!@",
+    "remotePath": "D:/SFTP"
   }
 } 
