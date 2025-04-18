@@ -191,7 +191,7 @@ async function transferFolderInfo(config: Config) {
   conn.on('error', (err: Error & { code?: string }) => {
     // ECONNRESET 에러는 파일 전송 완료 후 발생하면 무시
     if (err.code === 'ECONNRESET') {
-      console.log(err);
+      // console.log(err);
       console.log('연결이 종료되었습니다. (정상적인 종료 과정)');
       return;
     }
